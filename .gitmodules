@@ -1,0 +1,3 @@
+[submodule "SparkRDMA"]
+	path = SparkRDMA
+	url = https://github.com/Mellanox/SparkRDMA.git

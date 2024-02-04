@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.7)
+
+project(spark_ipc)
+set(CMAKE_BUILD_TYPE "Release")
+set(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -Wall -g2 -ggdb")
+set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -Wall -O3")
+
+set(ENV{JAVA_HOME} "/usr/lib/jvm/java-8-openjdk-amd64/")
+set(JAVA_AWT_LIBRARY "$ENV{JAVA_HOME}/lib/libjawt.so")
+set(JAVA_JVM_LIBRARY "$ENV{JAVA_HOME}/lib/server/libjvm.so")
+set(JAVA_INCLUDE_PATH "$ENV{JAVA_HOME}/include")
+set(JAVA_INCLUDE_PATH2 "$ENV{JAVA_HOME}/include/linux")
+set(JAVA_AWT_INCLUDE_PATH "$ENV{JAVA_HOME}/include")
+find_package(JNI 1.8 EXACT REQUIRED)
+message(${JNI_INCLUDE_DIRS})
+include_directories(${JNI_INCLUDE_DIRS})
+
+include_directories(.)
+aux_source_directory(. SRC)
+add_library(spark_ipc SHARED ${SRC})
