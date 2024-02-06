@@ -68,12 +68,30 @@ else
 fi
 # echo_info "Project path: ${proj_path}"
 # echo_info "Build path${build_path}"
+
+# local subdirectories
 dpu_path=${proj_path}/SparkDPU
 base_path=${proj_path}/SparkBase
 app_path=${proj_path}/SparkApps
+# local SPARK_HOME
 SPARK_HOME=/usr/local/spark
+# project path on remote hosts
 remote_proj_path=/home/${username}/code/spark-dpu/
+# target path on remote hosts
 remote_tar_path=/home/${username}/target
+# JAVA_HOME on remote hosts
+remote_java_home=/usr/lib/jvm/java-8-openjdk-amd64/
+# subnet address on remote hosts
 remote_net="192.168.200"
-dsts=(pkudpuhost1 pkudpuhost2)
-worker_ids=(1 2)
+# host prefix on remote hosts
+host_prefix="pkudpuhost"
+# dpu address from its remote host
+dpu_from_host="ubuntu@192.168.100.2"
+# project path on dpus
+dpu_proj_path=/home/ubuntu/code/spark-dpu/
+# target path on dpus
+dpu_tar_path=/home/ubuntu/target
+# JAVA_HOME on dpus
+dpu_java_home=/usr/local/jdk1.8.0_401/
+# the worker ids to run
+worker_ids=(1)

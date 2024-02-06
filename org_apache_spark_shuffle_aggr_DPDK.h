@@ -10,9 +10,17 @@ extern "C" {
 /*
  * Class:     org_apache_spark_shuffle_aggr_DPDK
  * Method:    ipc_init
- * Signature: (III)I
+ * Signature: ()I
  */
 JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init
+  (JNIEnv *, jclass);
+
+/*
+ * Class:     org_apache_spark_shuffle_aggr_DPDK
+ * Method:    ipc_initall
+ * Signature: (III)I
+ */
+JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1initall
   (JNIEnv *, jclass, jint, jint, jint);
 
 /*

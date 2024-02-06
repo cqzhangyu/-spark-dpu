@@ -18,8 +18,8 @@ LDFLAGS += -pthread -lrt
 CFLAGS += -O3 $(shell pkg-config --cflags doca)
 LDFLAGS = $(shell pkg-config --libs doca)
 
-# javah -jni -classpath ~/code/spark-dpu/core/src/main/java/ org.apache.spark.DPDK
-# javah -jni -classpath ~/code/spark-dpu/SparkDPU/target/classes org.apache.spark.shuffle.aggr.DPDK
+# javah -jni -classpath ~/spark-dpu/core/src/main/java/ org.apache.spark.DPDK
+# javah -jni -classpath ~/spark-dpu/SparkDPU/target/classes org.apache.spark.shuffle.aggr.DPDK
 
 SRCS := org_apache_spark_shuffle_aggr_DPDK.c dma_copy_core.c common.c utils.c pack.c
 

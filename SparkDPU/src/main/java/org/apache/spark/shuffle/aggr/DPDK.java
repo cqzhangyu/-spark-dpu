@@ -18,7 +18,8 @@
 package org.apache.spark.shuffle.aggr;
 
 public class DPDK {
-  public static native int ipc_init(int shuffle_id, int num_mapper, int num_reducer);
+  public static native int ipc_init();
+  public static native int ipc_initall(int shuffle_id, int num_mapper, int num_reducer);
   public static native int ipc_clean();
 
   public static native int ipc_write(

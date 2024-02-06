@@ -12,16 +12,16 @@ show_usage() {
     echo_warn "  ${appname} stop"
 }
 
-stop_dpdk() {
+stop_dpu() {
     
-    echo_info "Stopping DPDK..."
-    for loop in ${worker_ids[@]}
+    echo_info "Stopping DPU..."
+    for worker_id in ${worker_ids[@]}
     do
-        pid=`ssh ${username}@${remote_net}.${loop} 'pgrep sparkdpu'`
+        pid=`ssh ${username}@${remote_net}.${worker_id} "ssh ${dpu_from_host} pgrep dpu_test"`
         if [ ! $pid ]; then
-            echo_warn "DPDK not running on ${remote_net}.${loop}"
+            echo_warn "DPU not running on ${remote_net}.${worker_id}"
         else
-            echo_back "ssh ${username}@${remote_net}.${loop} 'sudo kill ${pid}'"
+            echo_back "ssh ${username}@${remote_net}.${worker_id} 'ssh ${dpu_from_host} sudo kill -15 ${pid}'"
         fi
         sleep 0.5
     done
@@ -53,13 +53,14 @@ start_spark() {
     echo_back "${SPARK_HOME}/sbin/start-all.sh"
 }
 
-start_dpdk() {
+start_dpu() {
     method=$1
-    for loop in ${worker_ids[@]}
+    for worker_id in ${worker_ids[@]}
     do
         case $method in
             "dpu")
-                echo_back "ssh ${username}@${remote_net}.${loop} 'sudo sh -c '\''${remote_tar_path}/dpu-sparkdpu > ${remote_tar_path}/dpdk_${loop}.txt 2>&1 &'\'''"
+                # echo_back "ssh ${username}@${remote_net}.${worker_id} 'sudo sh -c '\''${remote_tar_path}/dpu-sparkdpu > ${remote_tar_path}/dpdk_${worker_id}.txt 2>&1 &'\'''"
+                echo_back "ssh ${username}@${remote_net}.${worker_id} 'ssh ${dpu_from_host} '\"'${dpu_tar_path}/dpu_test -p 03:00.0 -r 01:00.0 > ${dpu_tar_path}/dpu_${worker_id}.txt 2>&1 &'\"''"
                 ;;
             *)
                 echo_erro "method name must be dpu"
@@ -69,11 +70,11 @@ start_dpdk() {
         sleep 0.5
     done
     sleep 5
-    for loop in ${worker_ids[@]}
+    for worker_id in ${worker_ids[@]}
     do
-        pid=`ssh ${username}@${remote_net}.${loop} 'pgrep sparkdpu'`
+        pid=`ssh ${username}@${remote_net}.${worker_id} "ssh ${dpu_from_host} pgrep dpu_test"`
         if [ ! $pid ]; then
-            echo_warn "DPDK not running on ${remote_net}.${loop}"
+            echo_warn "DPU not running on ${remote_net}.${worker_id}"
         fi
         sleep 0.5
     done
@@ -120,9 +121,8 @@ run_dpu() {
     NUM_KEY=$8
     APP_PATH=$9
     # input_file=$7
-    # echo_back "export LD_PRELOAD='/usr/local/dpdk-18.11/mybuild/lib/librte_mempool.so librte_eal.so librte_ethdev.so librte_pmd_kni.so librte_ring.so librte_kvargs.so librte_cmdline.so librte_kni.so librte_pmd_kni.so librte_mbuf.so'"
     echo_back "export LD_PRELOAD='librt.so'"
-    echo_back "export LD_SPARK_DPU='${remote_tar_path}/libspark_dpu.so'"
+    # echo_back "export LD_SPARK_DPU='${remote_tar_path}/libspark_dpu.so'"
     echo_back "${SPARK_HOME}/bin/spark-submit \
 --class 'WordCount' \
 --deploy-mode client \
@@ -143,6 +143,12 @@ ${NUM_WORKER} ${NUM_MAPPER_PER_WORKER} ${NUM_REDUCER_PER_WORKER} ${NUM_KV} ${NUM
 
 show_result() {
     time_used=`grep -n 'Job 1 finished' ${remote_tar_path}/driver_log | awk '{printf $13 '\"'\n'\"'}'`
+    
+    for worker_id in ${worker_ids[@]}
+    do
+        echo_back "ssh ${username}@${remote_net}.${worker_id} 'scp ${dpu_from_host}:${dpu_tar_path}/dpu_${worker_id}.txt ${remote_tar_path}'"
+        echo_back "scp ${username}@${remote_net}.${worker_id}:${remote_tar_path}/dpu_${worker_id}.txt ${remote_tar_path}"
+    done
     echo_info "Time used : ${time_used} s"
 }
 
@@ -150,16 +156,16 @@ test_xxx() {
     method=$1
     app=$2
     
-    worker_ids=(1 2)
     MASTER=${remote_net}.${worker_ids[0]}
     NUM_WORKER=${#worker_ids[@]}
 
+    # Edit configurations here!
     DRIMEM=8G
     EXEMEM=16G
     NUM_MAPPER_PER_WORKER=8
     NUM_REDUCER_PER_WORKER=8
-    NUM_KEY=65536
-    NUM_KV=5000000
+    NUM_KEY=100
+    NUM_KV=50
     # NUM_KEY=3
     # NUM_KV=10
     # NUM_MAPPER_PER_WORKER=2
@@ -181,7 +187,7 @@ test_xxx() {
     esac
 
     stop_spark
-    # stop_dpdk
+    stop_dpu
 
     set_slaves
     
@@ -194,7 +200,7 @@ test_xxx() {
             run_base ${MASTER} ${DRIMEM} ${EXEMEM} ${NUM_WORKER} ${NUM_MAPPER_PER_WORKER} ${NUM_REDUCER_PER_WORKER} ${NUM_KV} ${NUM_KEY} ${APP_PATH}
             ;;
         "dpu")
-            # start_dpdk ${method}
+            start_dpu ${method}
 
             run_dpu ${MASTER} ${DRIMEM} ${EXEMEM} ${NUM_WORKER} ${NUM_MAPPER_PER_WORKER} ${NUM_REDUCER_PER_WORKER} ${NUM_KV} ${NUM_KEY} ${APP_PATH}
             ;;
@@ -203,15 +209,15 @@ test_xxx() {
     show_result
 
     stop_spark
-    # stop_dpdk
+    stop_dpu
 
     sleep 5
 }
 
 cleanlog() {
-    for loop in ${worker_ids[@]}
+    for worker_id in ${worker_ids[@]}
     do
-        echo_back "ssh ${username}@${remote_net}.${loop} 'sudo rm -rf ${SPARK_HOME}/work/app-*'"
+        echo_back "ssh ${username}@${remote_net}.${worker_id} 'sudo rm -rf ${SPARK_HOME}/work/app-*'"
     done
 }
 
@@ -229,7 +235,7 @@ else
             ;;
         "stop")
             stop_spark
-            # stop_dpdk
+            stop_dpu
             ;;
         "startspark")
             MASTER=${remote_net}.1

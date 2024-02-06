@@ -55,12 +55,13 @@ class AGGRSharedShuffleFetcher(
   private[this] var isZombie = false
   @GuardedBy("this")
   private[this] val shuffleBlockIdsSet = mutable.HashSet[ShuffleBlockId]()
+  private[this] var tmpShuffleBlockId : ShuffleBlockId = null
 
   initialize()
 
   private[aggr] def releaseCurrentResultBuffer(): Unit = {
     // Release the current buffer if necessary
-    if (currentResult != null) {
+    if (currentResult != null && currentResult.buf != null) {
       currentResult.buf.release()
     }
     currentResult = null
@@ -77,7 +78,9 @@ class AGGRSharedShuffleFetcher(
       val result = iter.next()
       result match {
         case AGGRShuffleFetcher.SuccessFetchResult(_, address, _, buf, _) =>
-          buf.release()
+          if (buf != null) {
+            buf.release()
+          }
         case _ =>
       }
     }
@@ -88,7 +91,9 @@ class AGGRSharedShuffleFetcher(
   }
   private[this] def splitLocalRemoteBlocks() = {
     for ((address, blockInfos) <- blocksByAddress) {
-      if (address.executorId == blockManager.blockManagerId.executorId) {
+      // NOTE: Change here if you want to handle only local or remote blocks
+      logWarning("DELETE THIS!!!!!!!")
+      if (false && address.executorId == blockManager.blockManagerId.executorId) {
         localBlocks ++= blockInfos.filter(_._2 != 0).map(_._1)
         numLocalBlocksToFetch += localBlocks.size
       } else {
@@ -102,6 +107,9 @@ class AGGRSharedShuffleFetcher(
             ss(loop) = shuffleBlockId.shuffleId
             ms(loop) = shuffleBlockId.mapId
             rs(loop) = shuffleBlockId.reduceId
+            if (tmpShuffleBlockId == null) {
+              tmpShuffleBlockId = shuffleBlockId
+            }
           }
           DPDK.ipc_fetch(fetcherKey, address.host, ss, ms, rs)
         }
@@ -116,17 +124,21 @@ class AGGRSharedShuffleFetcher(
       val shuffleBlockId = blockId.asInstanceOf[ShuffleBlockId]
       shuffleBlockIdsSet += shuffleBlockId
       try {
-        var sum_size = 0
-        while (true) {
+        var sum_size : Long = 0
+        var read_end = false
+        while (!read_end) {
           val byte_arr = DPDK.ipc_read(shuffleBlockId.mapId, shuffleBlockId.reduceId)
           if (byte_arr == null) {
-            break
+            read_end = true
           }
-          val buf = new NioManagedBuffer(ByteBuffer.wrap(byte_arr))
-          buf.retain()
-          sum_size += buf.size
-          localResult.put(new AGGRShuffleFetcher.SuccessFetchResult(
-              blockId, blockManager.blockManagerId, buf.size, buf, false))
+          else {
+            val buf = new NioManagedBuffer(ByteBuffer.wrap(byte_arr))
+            buf.retain()
+            val buf_size = buf.size()
+            sum_size += buf_size
+            localResult.put(new AGGRShuffleFetcher.SuccessFetchResult(
+                blockId, blockManager.blockManagerId, buf.size, buf, false))
+          }
         }
         localResult.put(new AGGRShuffleFetcher.SuccessFetchResult(
             blockId, blockManager.blockManagerId, 0, null, false))
@@ -142,22 +154,26 @@ class AGGRSharedShuffleFetcher(
 
   def wait_remaining() {
     try {
-      var sum_size = 0
-      while (true) {
+      var sum_size : Long = 0
+      var wait_end = false
+      while (!wait_end) {
         val byte_arr = DPDK.ipc_wait(fetcherKey)
         if (byte_arr == null) {
           // wait finishes
-          break
+          wait_end = true
         }
-        val buf = new NioManagedBuffer(ByteBuffer.wrap(byte_arr))
-        sum_size += buf.size
-        buf.retain()
-        // wait has not finished yet
-        localResult.put(new AGGRShuffleFetcher.SuccessFetchResult(
-          localBlocks(0), blockManager.blockManagerId, buf.size, buf, false))
+        else {
+          val buf = new NioManagedBuffer(ByteBuffer.wrap(byte_arr))
+          buf.retain()
+          val buf_size = buf.size()
+          sum_size += buf_size
+          // wait has not finished yet
+          localResult.put(new AGGRShuffleFetcher.SuccessFetchResult(
+            tmpShuffleBlockId, blockManager.blockManagerId, buf.size, buf, false))
+        }
       }
       localResult.put(new AGGRShuffleFetcher.SuccessFetchResult(
-        localBlocks(0), blockManager.blockManagerId, 0, null, false))
+        tmpShuffleBlockId, blockManager.blockManagerId, 0, null, false))
 
       shuffleMetrics.incLocalBlocksFetched(1)
       shuffleMetrics.incLocalBytesRead(sum_size)

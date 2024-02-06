@@ -310,7 +310,7 @@ object AGGRShuffleFetcher {
       size: Long,
       buf: ManagedBuffer,
       isNetworkReqDone: Boolean) extends FetchResult {
-    require(buf != null)
+    // require(buf != null)
     require(size >= 0)
   }
 

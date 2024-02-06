@@ -12,7 +12,7 @@ show_usage() {
     echo_info "Usage: ${appname} [Options]"
     echo_info "     [NO OPTION]    Compile all."
     echo_info "     java           Compile jar files locally."
-    echo_info "     dpdk           Compile dpdk files on servers."
+    echo_info "     dma           Compile dma files on servers."
     echo_info "     copy           Send compiled jar files to servers."
     echo_info "     shm            Configure shared memory on servers."
     echo_info "     clean          Clean generated files."
@@ -34,29 +34,33 @@ compile_java() {
         echo_back "sbt package"
         echo_back "cd ${app_path}/groupby"
         echo_back "sbt package"
-        echo_back "cd ${app_path}/sql"
-        echo_back "sbt package"
     fi
-    if [ $# -eq 0 ] || [ $(contains "ipc" ${all_args[@]}) == "y" ]; then
-        echo_back "cd ${dpu_path}/ipc"
-        echo_back "make"
-    fi
+    # if [ $# -eq 0 ] || [ $(contains "ipc" ${all_args[@]}) == "y" ]; then
+    #     echo_back "cd ${dpu_path}/ipc"
+    #     echo_back "make"
+    # fi
 }
 
 # 2
 compile_dma() {
-    for dst in ${dsts[@]}
+    for worker_id in ${worker_ids[@]}
     do
-        echo_back "ssh ${dst} 'cd ${remote_proj_path}/SparkDPU/dma;mkdir -p bin;cd bin;cmake ..;make;cp --remove-destination ${remote_proj_path}/SparkDPU/dma/libspark_dpu.so ${remote_tar_path}/libspark_dpu.so'"
-        # echo_back "ssh ${dst} 'cd ${remote_proj_path}/SparkDPU/dpdk;make;cp --remove-destination ${remote_proj_path}/SparkDPU/dpdk/build/sparkdpu ${remote_tar_path}/dpu-sparkdpu'"
+        dst="${host_prefix}${worker_id}"
+        # compile dma module on dpu host
+        echo_back "ssh ${dst} 'mkdir -p ${remote_tar_path}'"
+        echo_back "ssh ${dst} 'cd ${remote_proj_path}/SparkDPU/dma;mkdir -p bin;cd bin;export JAVA_HOME=${remote_java_home};cmake ..;make -j 4;cp --remove-destination ${remote_proj_path}/SparkDPU/dma/bin/libspark_dpu.so ${remote_tar_path}/libspark_dpu.so'"
+
+        # compile dma module on dpu
+        echo_back "ssh ${dst} 'ssh ${dpu_from_host} '\''cd ${dpu_proj_path}/SparkDPU/dma;mkdir -p bin;cd bin;export JAVA_HOME=${dpu_java_home};cmake ..;make -j 4;cp --remove-destination ${dpu_proj_path}/SparkDPU/dma/bin/dpu_test ${dpu_tar_path}/dpu_test'\'''"
     done
 }
 
 # 3
 copy_java() {
     all_args=($*)
-    for dst in ${dsts[@]}
+    for worker_id in ${worker_ids[@]}
     do
+        dst="${host_prefix}${worker_id}"
         echo_back "ssh ${dst} 'mkdir -p ${remote_tar_path}'"
         if [ $# -eq 0 ] || [ $(contains "dpu" ${all_args[@]}) == "y" ]; then
             echo_back "scp ${dpu_path}/target/spark-dpu-1.0-for-spark-2.3.0-jar-with-dependencies.jar ${dst}:${remote_tar_path}"
@@ -69,9 +73,9 @@ copy_java() {
             echo_back "scp ${app_path}/reduceby/target/scala-2.11/reduceby-word-count_2.11-1.0.jar ${dst}:${remote_tar_path}"
             echo_back "scp ${app_path}/groupby/target/scala-2.11/groupby-word-count_2.11-1.0.jar ${dst}:${remote_tar_path}"
         fi
-        if [ $# -eq 0 ] || [ $(contains "ipc" ${all_args[@]}) == "y" ]; then
-            echo_back "scp ${dpu_path}/ipc/libspark_dpu.so ${dst}:${remote_tar_path}"
-        fi
+        # if [ $# -eq 0 ] || [ $(contains "ipc" ${all_args[@]}) == "y" ]; then
+        #     echo_back "scp ${dpu_path}/ipc/libspark_dpu.so ${dst}:${remote_tar_path}"
+        # fi
     done
 }
 
@@ -79,15 +83,14 @@ do_compile() {
     compile_java
     compile_dma
     copy_java
-    init_shm
 }
 
 do_clean() {
     echo_back "rm -rf ${build_path}"
-    for dst in ${dsts[@]}
+    for worker_id in ${worker_ids[@]}
     do
+        dst="${host_prefix}${worker_id}"
         echo_back "ssh ${dst} 'rm -rf ${remote_tar_path}'"
-        
     done
 }
 
@@ -103,7 +106,7 @@ else
         clean)
             do_clean
             ;;
-        dpdk)
+        dma)
             compile_dma
             ;;
         java)

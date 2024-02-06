@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 extern "C" {
         
     #include <fcntl.h>
@@ -21,10 +20,12 @@ extern "C" {
     #include <pthread.h>
 
     #include "org_apache_spark_shuffle_aggr_DPDK.h"
-    #include "pack.h"
-    #include "utils.h"
-    #include "common.h"
-    #include "dma_copy_core.h"
+    #include "../common/pack.h"
+    #include "../common/utils.h"
+    #include "../common/common.h"
+    #include "../common/dma_copy_core.h"
+    #include "../common/log.h"
+    #include "../common/types.h"
 
     #include <doca_buf.h>
     #include <doca_buf_inventory.h>
@@ -39,30 +40,22 @@ extern "C" {
 #include <mutex>
 #include <mutex>
 
+#define LOG_PATH "/home/zcq/target/ipc-output.txt"
+
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
-
-#define SERVER_NAME "SPARK_DPU"
 
 #define MAX_DOCA_ARGC 30
 #define MAX_DOCA_LEN_ARGV 50
 
-#define MAX_CC_MSG_SIZE 4000
-#define MAX_NUM_BLOCK   1024
-#define MAX_BLOCK_SIZE  MAX_DMA_BUF_SIZE
-#define MAX_KV_PER_BLOCK      ((MAX_BLOCK_SIZE - 16) / 8)
-
 #define MAX_MAPPER_PER_WORKER   16
 #define MAX_REDUCER_PER_WORKER  16
 
-#define MSG_TYPE_INIT 1000
-#define MSG_TYPE_WRITE 1001
-#define MSG_TYPE_READ 1002
-#define MSG_TYPE_WAIT 1003
+#define MMAP_SIZE (MAX_NUM_BLOCK * MAX_BLOCK_SIZE)
 
-#define SLEEP_TIME  1000
-
-DOCA_LOG_REGISTER(IPC)
+#define MAX_CC_WRITE_TASK   ((MAX_CC_MSG_SIZE - sizeof(struct msg_write_t)) / sizeof(struct write_task_t))
+#define MAX_CC_READ_TASK    ((MAX_CC_MSG_SIZE - sizeof(struct msg_read_t)) / sizeof(struct read_task_t))
+#define MAX_CC_WAIT_MSG     (MAX_NUM_BLOCK * 2)
 
 struct dma_context_t {
     struct dma_copy_cfg dma_cfg;
@@ -82,34 +75,6 @@ struct dma_context_t {
     int num_reducer;
 };
 
-struct kv_pair_t {
-    int key;
-    int val;
-};
-
-struct msg_init_t {
-    int type;
-    int sid;
-    int num_mapper;
-    int num_reducer;
-    void* write_desc;
-    void* read_desc;
-    void* read_addr;
-    size_t read_size;
-};
-
-struct msg_write_t {
-    int type;
-    int msg_id;
-    int mid;
-    int num_task;
-};
-
-struct write_task_t {
-    void *addr;
-    int rid;
-    int num_kv;
-};
 
 struct block_pointer {
     void *addr;
@@ -118,29 +83,7 @@ struct block_pointer {
     struct block_pointer *next;
 };
 
-struct msg_read_t {
-    int type;
-    uint32_t dst;
-    int msg_id;
-    int num_task;
-};
-
-struct read_task_t {
-    int mid;
-    int rid;
-};
-
-struct msg_wait_t {
-    int type;
-    int msg_id;
-    void *addr;
-    size_t size;
-};
-
-
-#define MAX_CC_WRITE_TASK   ((MAX_CC_MSG_SIZE - sizeof(struct msg_write_t)) / sizeof(struct write_task_t))
-#define MAX_CC_READ_TASK    ((MAX_CC_MSG_SIZE - sizeof(struct msg_read_t)) / sizeof(struct read_task_t))
-#define MAX_CC_WAIT_MSG     (MAX_NUM_BLOCK * 2)
+static char file_name[1024] = {0};
 
 static struct dma_context_t dma_ctx;
 
@@ -185,7 +128,7 @@ static std::vector<struct msg_wait_t *> *lrid_waits;
 static struct block_pointer *get_avail_write_block() {
     std::lock_guard<std::mutex> lock(write_mutex);
     if (unlikely(used_write_blocks == MAX_NUM_BLOCK)) {
-        printf("Run out of blocks!\n");
+        LOG_DEBUG("Run out of blocks!\n");
         return NULL;
     }
     struct block_pointer *block = &avail_write_blocks[used_write_blocks ++];
@@ -248,22 +191,27 @@ static inline int cc_send_msg(void *msg, int size) {
                 msg, 
                 size, 
                 DOCA_CC_MSG_FLAG_NONE,
-                dma_ctx.peer_addr)) == DOCA_ERROR_AGAIN)
+                dma_ctx.peer_addr)) == DOCA_ERROR_AGAIN) {
+        LOG_DEBUG("retrying to send msg with type %d\n", *(int *)msg);
         nanosleep(&ts, &ts);
-
-    if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to send msg_write to DPU: %s", doca_get_error_string(result));
-        return result;
     }
+    
+    if (result != DOCA_SUCCESS) {
+        LOG_ERRO("Failed to send msg with type %d to DPU: %s", *(int *)msg, doca_get_error_string(result));
+        return 1;
+    }
+
+    return 0;
 }
 
 JNIEXPORT jint JNICALL 
 Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
                                     JNIEnv * env, 
-                                    jclass obj, 
-                                    jint shuffle_id, 
-                                    jint num_mapper, 
-                                    jint num_reducer) {
+                                    jclass obj) {
+    
+    log_open(LOG_PATH);
+    set_log_level(LOG_LEVEL_INFO);
+    strcpy(file_name, LOG_PATH);
     
     doca_error_t result;
     int argc = 0;
@@ -282,10 +230,11 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
 
     result = doca_argp_init("spark_dma", &dma_ctx.dma_cfg);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to init ARGP resources: %s", doca_get_error_string(result));
+        LOG_ERRO("Failed to init ARGP resources: %s", doca_get_error_string(result));
         return EXIT_FAILURE;
     }
     register_dma_copy_params();
+    LOG_DEBUG("Successfully init doca argp : %d\n", __LINE__);
 
     // prepare arg parameters
     for (int i = 0; i < MAX_DOCA_ARGC; i ++) {
@@ -297,79 +246,99 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
 
     result = doca_argp_start(argc, argv);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to parse application input: %s", doca_get_error_string(result));
+        LOG_ERRO("Failed to parse application input: %s", doca_get_error_string(result));
         return EXIT_FAILURE;
     }
+    LOG_DEBUG("Successfully start doca argp : %d\n", __LINE__);
     
     result = init_cc(&dma_ctx.dma_cfg, &dma_ctx.ep, &dma_ctx.cc_dev, &dma_ctx.cc_dev_rep);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to Initiate Comm Channel");
+        LOG_ERRO("Failed to Initiate Comm Channel");
         return EXIT_FAILURE;
     }
+    LOG_DEBUG("Successfully init cc : %d\n", __LINE__);
 
     /* Open DOCA dma device */
     result = open_dma_device(&dma_ctx.core_state.dev);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to open DMA device");
+        LOG_ERRO("Failed to open DMA device");
         return EXIT_FAILURE;
     }
+    LOG_DEBUG("Successfully open dma device : %d\n", __LINE__);
 
     /* Create DOCA core objects */
     result = create_core_objs(&dma_ctx.core_state, dma_ctx.dma_cfg.mode);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to create DOCA core structures");
+        LOG_ERRO("Failed to create DOCA core structures");
         return EXIT_FAILURE;
     }
+    LOG_DEBUG("Successfully create_core_objs : %d\n", __LINE__);
     
     /* Init DOCA core objects */
     result = init_core_objs(&dma_ctx.core_state, &dma_ctx.dma_cfg);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to initialize DOCA core structures");
+        LOG_ERRO("Failed to initialize DOCA core structures");
         return EXIT_FAILURE;
     }
-
-    // result = host_start_dma_copy(&dma_ctx.dma_cfg, &dma_ctx.core_state, dma_ctx.ep, &dma_ctx.peer_addr);
+    LOG_DEBUG("Successfully init_core_objs : %d\n", __LINE__);
     
     /* Initialize communication channel */
-
+    
     result = doca_comm_channel_ep_connect(dma_ctx.ep, SERVER_NAME, &dma_ctx.peer_addr);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to establish a connection with the DPU: %s", doca_get_error_string(result));
+        LOG_ERRO("Failed to establish a connection with the DPU: %s", doca_get_error_string(result));
         return result;
     }
+    LOG_DEBUG("Successfully connect to cc server : %d\n", __LINE__);
 
     while ((result = doca_comm_channel_peer_addr_update_info(dma_ctx.peer_addr)) == DOCA_ERROR_CONNECTION_INPROGRESS)
         nanosleep(&ts, &ts);
-
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to validate the connection with the DPU: %s", doca_get_error_string(result));
+        LOG_ERRO("Failed to validate the connection with the DPU: %s", doca_get_error_string(result));
         return result;
     }
 
-    DOCA_LOG_INFO("Connection to DPU was established successfully");
-    const size_t mmap_size = MAX_NUM_BLOCK * MAX_BLOCK_SIZE;
+    LOG_INFO("Connection to DPU was established successfully\n");
 
-    result = memory_alloc_and_populate(dma_ctx.core_state.write_mmap, mmap_size, DOCA_ACCESS_DPU_READ_WRITE, &dma_ctx.write_buf);
+    result = memory_alloc_and_populate(dma_ctx.core_state.write_mmap, MMAP_SIZE, DOCA_ACCESS_DPU_READ_WRITE, &dma_ctx.write_buf);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to populate write_mmap");
+        LOG_ERRO("Failed to populate write_mmap");
         return EXIT_FAILURE;
     }
-    result = memory_alloc_and_populate(dma_ctx.core_state.read_mmap, mmap_size, DOCA_ACCESS_DPU_READ_WRITE, &dma_ctx.read_buf);
+    result = memory_alloc_and_populate(dma_ctx.core_state.read_mmap, MMAP_SIZE, DOCA_ACCESS_DPU_READ_WRITE, &dma_ctx.read_buf);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to populate read_mmap");
+        LOG_ERRO("Failed to populate read_mmap");
         return EXIT_FAILURE;
     }
+    LOG_DEBUG("Successfully populate write_mmap and read_mmap : %d\n", __LINE__);
 
     result = doca_mmap_export_dpu(dma_ctx.core_state.write_mmap, dma_ctx.core_state.dev, (const void **)&dma_ctx.write_desc, &export_desc_len);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to export DOCA mmap: %s", doca_get_error_string(result));
+        LOG_ERRO("Failed to export DOCA mmap: %s", doca_get_error_string(result));
         return result;
     }
     result = doca_mmap_export_dpu(dma_ctx.core_state.read_mmap, dma_ctx.core_state.dev, (const void **)&dma_ctx.read_desc, &export_desc_len);
     if (result != DOCA_SUCCESS) {
-        DOCA_LOG_ERR("Failed to export DOCA mmap: %s", doca_get_error_string(result));
+        LOG_ERRO("Failed to export DOCA mmap: %s", doca_get_error_string(result));
         return result;
     }
+    LOG_DEBUG("Successfully export mmap : %d\n", __LINE__);
+
+    return 0;
+}
+
+
+JNIEXPORT jint JNICALL 
+Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1initall(
+                                    JNIEnv * env, 
+                                    jclass obj, 
+                                    jint shuffle_id, 
+                                    jint num_mapper, 
+                                    jint num_reducer) {
+    doca_error_t result;
+    struct timespec ts = {
+        .tv_nsec = SLEEP_TIME,
+    };
 
     dma_ctx.sid = shuffle_id;
     dma_ctx.num_mapper = num_mapper;
@@ -383,10 +352,11 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
     msg.write_desc = dma_ctx.write_desc;
     msg.read_desc = dma_ctx.read_desc;
     msg.read_addr = dma_ctx.read_buf;
-    msg.read_size = mmap_size;
+    msg.read_size = MMAP_SIZE;
 
     /* Send the memory map export descriptor to DPU */
     cc_send_msg(&msg, sizeof(struct msg_init_t));
+    LOG_INFO("Successfully sent msg_init\n");
     // result = wait_for_successful_status_msg(ep, peer_addr);
     // if (result != DOCA_SUCCESS)
     // 	return result;
@@ -421,6 +391,15 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
     lrid_finished_wait = new int[MAX_REDUCER_PER_WORKER]();
     wait_msgs = new struct msg_wait_t[MAX_NUM_BLOCK * 2]();
     lrid_waits = new std::vector<struct msg_wait_t *>[MAX_REDUCER_PER_WORKER];
+
+    LOG_WARN("DELETE THIS!!!!!!!! %d\n", __LINE__);
+    int tmp_kv = 3;
+    for (int i = 0; i < tmp_kv; i ++) {
+        struct kv_pair_t *kv_ptr = (struct kv_pair_t *)dma_ctx.read_buf + i;
+        kv_ptr->key = i;
+        kv_ptr->val = i + 1;
+    }
+
     return 0;
 }
 
@@ -459,22 +438,26 @@ JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1clean
     delete[] lrid_finished_wait;
     delete[] wait_msgs;
     delete[] lrid_waits;
+    
     return 0;
 }
 
 
 JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1write(JNIEnv *env, jclass obj, jint map_id, jint num_partitions, jintArray kv, jint num) {
-
     int lmid = get_lmid_from_map_id(map_id);
+    LOG_DEBUG("ipc_write map_id=%d, num_partitions=%d, num=%d\n", map_id, num_partitions, num);
 
     struct kv_pair_t *kv_pairs = (struct kv_pair_t*) env->GetIntArrayElements(kv, 0);
     int kv_num = num / 2;
     int num_partition = dma_ctx.num_reducer;
+    LOG_DEBUG("ipc_write kv_num: %d, num_partition: %d, lmid: %d\n", kv_num, num_partition, lmid);
     for (int i = 0; i < kv_num; i ++) {
         int partition = kv_pairs[i].key % num_partition;
         int map_block_id = partition + lmid * num_partition;
         struct block_pointer *map_block = write_blocks[map_block_id];
-        *(((struct kv_pair_t *)map_block->addr) + map_block->num_kv) = kv_pairs[i];
+        LOG_DEBUG("ipc_write key=%d, val=%d, map_block_id=%d, map_block->addr=%016lx\n", kv_pairs[i].key, kv_pairs[i].val, map_block_id, (uintptr_t)map_block->addr);
+        
+        ((struct kv_pair_t *)map_block->addr)[map_block->num_kv] = kv_pairs[i];
         map_block->num_kv ++;
         if (unlikely(map_block->num_kv == MAX_KV_PER_BLOCK)) {
             // cc_send_write_msg(map_block->block, map_block->off * sizeof(struct kv_pair_t));
@@ -488,6 +471,8 @@ JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1write(JNIEnv
     }
 
     env->ReleaseIntArrayElements(kv, (jint*) kv_pairs, 0);
+
+
     return 0;
 }
 
@@ -496,13 +481,11 @@ JNIEXPORT jlongArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1length
     int lmid = get_lmid_from_map_id(map_id);
 
     jlongArray ret = env->NewLongArray(num_partitions);
-    char index_path[190];
-
-    FILE* fp = fopen(index_path, "w+");
 
     jlong *partition_lengths = new jlong[num_partitions];
     
     char buf[MAX_CC_MSG_SIZE];
+    doca_error_t result;
 
     struct msg_write_t *msg = (struct msg_write_t *) buf;
     struct write_task_t *tasks = (struct write_task_t *) (buf + sizeof(struct msg_write_t));
@@ -529,9 +512,14 @@ JNIEXPORT jlongArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1length
                 task->num_kv = map_block->num_kv;
                 msg->num_task ++;
 
+                // LOG_WARN("DELETE THIS!!!!!!!! %d\n", __LINE__);
+                memcpy(task->addr, (void *)((uintptr_t)task->addr + 8), task->num_kv * sizeof(struct kv_pair_t));
+                *(size_t *)task->addr = task->num_kv * sizeof(struct kv_pair_t);
+
                 if (unlikely(msg->num_task == MAX_CC_WRITE_TASK)) {
                     /* Send a write msg to DPU */
                     cc_send_msg(msg, sizeof(msg_write_t) + msg->num_task * sizeof(write_task_t));
+                    LOG_DEBUG("sent msg_write: msg_id = %d, mid = %d, num_task = %d\n", msg->msg_id, msg->mid, msg->num_task);
                     msg->num_task = 0;
                 }
             }
@@ -542,6 +530,8 @@ JNIEXPORT jlongArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1length
     if (msg->num_task != 0) {
         /* Send a write msg to DPU */
         cc_send_msg(msg, sizeof(msg_write_t) + msg->num_task * sizeof(write_task_t));
+        LOG_DEBUG("sent msg_write: msg_id = %d, mid = %d, num_task = %d\n", msg->msg_id, msg->mid, msg->num_task);
+
         msg->num_task = 0;
     }
     env->SetLongArrayRegion(ret, 0, num_partitions, partition_lengths);
@@ -579,6 +569,7 @@ JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1fetch(JNIEnv
                                                                          jintArray reduce_ids) {
     const char* dst_ip = env->GetStringUTFChars(hostName, NULL);
     char buf[MAX_CC_MSG_SIZE];
+    doca_error_t result;
 
     int lrid = get_lrid_from_key(key);
     struct msg_read_t *msg = (struct msg_read_t*) buf;
@@ -603,12 +594,14 @@ JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1fetch(JNIEnv
         if (msg->num_task == MAX_CC_READ_TASK) {
             msg->msg_id = get_new_msg_id(lrid);
             cc_send_msg(msg, sizeof(struct msg_read_t) + msg->num_task * sizeof(struct read_task_t));
+            LOG_DEBUG("sent msg_read: dst = %08x, msg_id = %d, num_task = %d\n", msg->dst, msg->msg_id, msg->num_task);
             msg->num_task = 0;
         }
     }
     if (msg->num_task!= 0) {
         msg->msg_id = get_new_msg_id(lrid);
         cc_send_msg(msg, sizeof(struct msg_read_t) + msg->num_task * sizeof(struct read_task_t));
+        LOG_DEBUG("sent msg_read: dst = %08x, msg_id = %d, num_task = %d\n", msg->dst, msg->msg_id, msg->num_task);
     }
 
     env->ReleaseIntArrayElements(shuffle_ids, ss, 0);
@@ -627,12 +620,13 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1read(J
         return NULL;
     }
 
-    struct kv_pair_t *kv_pairs = (struct kv_pair_t *) (map_block->addr + 8);
+    struct kv_pair_t *kv_pairs = (struct kv_pair_t *) ((uintptr_t)map_block->addr + 8);
     int num_kv = *(size_t *)(map_block->addr) / sizeof(struct kv_pair_t);
     jbyteArray ret = env->NewByteArray(num_kv * sizeof(struct kv_pair_t));
     env->SetByteArrayRegion(ret, 0, num_kv * sizeof(struct kv_pair_t), (const jbyte*)kv_pairs);
 
     write_blocks[map_block_id] = map_block->next;
+
     return ret;
 }
 
@@ -647,7 +641,9 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
     };
 
     int lrid = get_lrid_from_key(key);
+    LOG_DEBUG("Entering ipc_wait, key=%d\n, lrid=%d\n", key, lrid);
     if (lrid_finished_read[lrid] == lrid_total_read[lrid]) {
+        LOG_DEBUG("Leaving ipc_wait and returning NULL, key=%d\n", key);
         return NULL;
     }
 
@@ -655,13 +651,16 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
         // try to receive a msg_wait from the unfinished wait msgs
         msg = get_msg_wait_from_lrid(lrid);
         if (msg == NULL) {
+            LOG_DEBUG("ipc_wait: lrid %d tries to acquire the cc lock\n", lrid);
             // try to acquire the cc lock
             std::lock_guard<std::mutex> cc_lock(cc_mutex);
+            LOG_DEBUG("ipc_wait: lrid %d acquires the cc lock\n", lrid);
+            
             // check the unfinished wait msgs again
             msg = get_msg_wait_from_lrid(lrid);
             if (msg == NULL) {
                 struct msg_wait_t *_msg;
-                size_t _msg_len;
+                size_t _msg_len = MAX_CC_MSG_SIZE;
                 // wait for a msg_wait from cc
                 while ((result = doca_comm_channel_ep_recvfrom(
                                     dma_ctx.ep, 
@@ -670,19 +669,27 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
                                     DOCA_CC_MSG_FLAG_NONE,
                                     &dma_ctx.peer_addr)) == DOCA_ERROR_AGAIN) {
                     nanosleep(&ts, &ts);
+                    _msg_len = MAX_CC_MSG_SIZE;
+                }
+
+                if (result != DOCA_SUCCESS) {
+                    LOG_ERRO("Failed to receive msg_wait from DPU: %s", doca_get_error_string(result));
+                    return NULL;
                 }
 
                 if (unlikely(*(int *)buf != MSG_TYPE_WAIT)) {
-                    printf("Unknown message type: %d\n", *(int *)buf);
+                    LOG_DEBUG("Unknown message type: %d\n", *(int *)buf);
                     return NULL;
                 }
 
                 std::lock_guard<std::mutex> read_lock(read_mutex);
                 _msg = &wait_msgs[num_wait_msg];
                 memcpy(_msg, buf, sizeof(struct msg_wait_t));
+
+                LOG_DEBUG("received msg_wait: msg_id = %d, size = %ld\n", _msg->msg_id, _msg->size);
                 num_wait_msg ++;
                 if (unlikely(num_wait_msg == MAX_CC_WAIT_MSG)) {
-                    printf("Too many wait messages!\n");
+                    LOG_DEBUG("Too many wait messages!\n");
                     return NULL;
                 }
 
@@ -690,6 +697,8 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
                 int _lrid = msg_id_to_lrid[_msg->msg_id];
                 lrid_waits[_lrid].push_back(_msg);
                 lrid_total_wait[_lrid] ++;
+
+                LOG_DEBUG("msg_wait effects: lrid=%d, finished_wait=%d, total_wait=%d\n", _lrid, lrid_finished_wait[_lrid], lrid_total_wait[_lrid]);
             }
         }
 
@@ -699,8 +708,14 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
                 // the last msg_wait of a msg_read
                 std::lock_guard<std::mutex> read_lock(read_mutex);
                 lrid_finished_read[lrid] ++;
+                
+                if (lrid_finished_read[lrid] == lrid_total_read[lrid]) {
+                    LOG_DEBUG("Leaving ipc_wait and returning NULL, key=%d\n", key);
+                    return NULL;
+                }
             }
             else {
+                LOG_DEBUG("process a msg_wait : lrid=%d, finished_wait=%d, total_wait=%d\n", lrid, lrid_finished_wait[lrid], lrid_total_wait[lrid]);
                 break;
             }
         }
@@ -708,5 +723,7 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
 
     jbyteArray ret = env->NewByteArray(msg->size);
     env->SetByteArrayRegion(ret, 0, msg->size, (const jbyte*)msg->addr);
+    
+    LOG_DEBUG("Leaving ipc_wait and returning a buffer, key=%d\n", key);
     return ret;
 }

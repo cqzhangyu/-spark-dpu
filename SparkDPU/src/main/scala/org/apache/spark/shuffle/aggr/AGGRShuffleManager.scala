@@ -41,13 +41,12 @@ private[spark] class AGGRShuffleManager(val conf: SparkConf) extends ShuffleMana
   override val shuffleBlockResolver = new AGGRShuffleBlockResolver(conf)
   // override val shuffleBlockResolver = new IndexShuffleBlockResolver(conf)
   val jSerializer = new JavaSerializerInt(conf)
-  // DPDK.ipc_init()
+  DPDK.ipc_init()
 
   override def registerShuffle[K, V, C](
       shuffleId: Int,
       numMaps: Int,
       dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
-    DPDK.ipc_init(shuffleId, numMaps, dependency.partitioner.numPartitions)
     new AGGRSharedShuffleHandle(
       shuffleId, numMaps, dependency.asInstanceOf[ShuffleDependency[K, V, V]])
     // if (AGGRShuffleManager.shouldBypassAGGR(conf, dependency)) {
@@ -104,6 +103,9 @@ private[spark] class AGGRShuffleManager(val conf: SparkConf) extends ShuffleMana
         val temp_handle =
           handle.asInstanceOf[AGGRSharedShuffleHandle[K @unchecked, V @unchecked]]
         // DPDK.ipc_initall(temp_handle.dependency.partitioner.numPartitions)
+        val numPartitions = temp_handle.dependency.partitioner.numPartitions
+        // logInfo("numPartitions: " + numPartitions)
+        DPDK.ipc_initall(temp_handle.shuffleId, temp_handle.numMaps, numPartitions)
       }
     }
     numMapsForShuffle.putIfAbsent(

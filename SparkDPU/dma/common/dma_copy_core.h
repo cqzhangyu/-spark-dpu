@@ -24,7 +24,6 @@
 #define MAX_ARG_SIZE 128					/* PCI address and file path maximum length */
 #define MAX_DMA_BUF_SIZE (1024 * 1024)				/* DMA buffer maximum size */
 #define CC_MAX_MSG_SIZE 4080					/* Comm Channel message maximum size */
-#define SERVER_NAME "dma copy server"				/* Comm Channel service name */
 
 enum dma_copy_mode {
 	DMA_COPY_MODE_HOST,					/* Run endpoint in Host */
