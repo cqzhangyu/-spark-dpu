@@ -92,8 +92,8 @@ class AGGRSharedShuffleFetcher(
   private[this] def splitLocalRemoteBlocks() = {
     for ((address, blockInfos) <- blocksByAddress) {
       // NOTE: Change here if you want to handle only local or remote blocks
-      logWarning("DELETE THIS!!!!!!!")
-      if (false && address.executorId == blockManager.blockManagerId.executorId) {
+      // logWarning("DELETE THIS!!!!!!!")
+      if (address.executorId == blockManager.blockManagerId.executorId) {
         localBlocks ++= blockInfos.filter(_._2 != 0).map(_._1)
         numLocalBlocksToFetch += localBlocks.size
       } else {

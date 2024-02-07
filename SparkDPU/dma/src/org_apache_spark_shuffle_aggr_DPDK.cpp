@@ -40,7 +40,7 @@ extern "C" {
 #include <mutex>
 #include <mutex>
 
-#define LOG_PATH "/home/zcq/target/ipc-output.txt"
+// #define LOG_PATH "/home/zcq/target/ipc-output.txt"
 
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
@@ -82,8 +82,6 @@ struct block_pointer {
     int num_kv;
     struct block_pointer *next;
 };
-
-static char file_name[1024] = {0};
 
 static struct dma_context_t dma_ctx;
 
@@ -209,9 +207,8 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
                                     JNIEnv * env, 
                                     jclass obj) {
     
-    log_open(LOG_PATH);
+    // log_open(LOG_PATH);
     set_log_level(LOG_LEVEL_INFO);
-    strcpy(file_name, LOG_PATH);
     
     doca_error_t result;
     int argc = 0;

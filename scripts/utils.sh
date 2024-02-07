@@ -93,5 +93,19 @@ dpu_proj_path=/home/ubuntu/code/spark-dpu/
 dpu_tar_path=/home/ubuntu/target
 # JAVA_HOME on dpus
 dpu_java_home=/usr/local/jdk1.8.0_401/
-# the worker ids to run
+
+# Edit runtime configurations here!
 worker_ids=(1)
+DRIMEM=8G
+EXEMEM=16G
+NUM_MAPPER_PER_WORKER=8
+NUM_REDUCER_PER_WORKER=8
+NUM_KEY=100
+NUM_KV=50
+# NUM_KEY=3
+# NUM_KV=10
+# NUM_MAPPER_PER_WORKER=2
+# NUM_REDUCER_PER_WORKER=2
+# NUM_KEY=10
+# NUM_KV=30
+# the worker ids to run

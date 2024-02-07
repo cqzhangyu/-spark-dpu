@@ -159,20 +159,6 @@ test_xxx() {
     MASTER=${remote_net}.${worker_ids[0]}
     NUM_WORKER=${#worker_ids[@]}
 
-    # Edit configurations here!
-    DRIMEM=8G
-    EXEMEM=16G
-    NUM_MAPPER_PER_WORKER=8
-    NUM_REDUCER_PER_WORKER=8
-    NUM_KEY=100
-    NUM_KV=50
-    # NUM_KEY=3
-    # NUM_KV=10
-    # NUM_MAPPER_PER_WORKER=2
-    # NUM_REDUCER_PER_WORKER=2
-    # NUM_KEY=10
-    # NUM_KV=30
-
     case $app in
         "reduce")
             APP_PATH=${remote_tar_path}/reduceby-word-count_2.11-1.0.jar
