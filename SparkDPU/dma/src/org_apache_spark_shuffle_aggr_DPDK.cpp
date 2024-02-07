@@ -40,7 +40,7 @@ extern "C" {
 #include <mutex>
 #include <mutex>
 
-// #define LOG_PATH "/home/zcq/target/ipc-output.txt"
+#define LOG_PATH "/home/zcq/target/ipc-output.txt"
 
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
@@ -134,6 +134,7 @@ static struct block_pointer *get_avail_write_block() {
 }
 
 static inline int get_lmid_from_map_id(int map_id) {
+    std::lock_guard<std::mutex> lock(write_mutex);
     auto it = map_id_to_lmid.find(map_id);
     if (it == map_id_to_lmid.end()) {
         map_id_to_lmid[map_id] = num_local_map;
@@ -207,8 +208,8 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1init(
                                     JNIEnv * env, 
                                     jclass obj) {
     
-    // log_open(LOG_PATH);
-    set_log_level(LOG_LEVEL_INFO);
+    log_open(LOG_PATH);
+    set_log_level(LOG_LEVEL_DEBUG);
     
     doca_error_t result;
     int argc = 0;
@@ -442,7 +443,6 @@ JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1clean
 
 JNIEXPORT jint JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1write(JNIEnv *env, jclass obj, jint map_id, jint num_partitions, jintArray kv, jint num) {
     int lmid = get_lmid_from_map_id(map_id);
-    LOG_DEBUG("ipc_write map_id=%d, num_partitions=%d, num=%d\n", map_id, num_partitions, num);
 
     struct kv_pair_t *kv_pairs = (struct kv_pair_t*) env->GetIntArrayElements(kv, 0);
     int kv_num = num / 2;
@@ -489,6 +489,7 @@ JNIEXPORT jlongArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1length
     msg->type = MSG_TYPE_WRITE;
     msg->msg_id = lmid;
     msg->mid = map_id;
+    msg->num_task = 0;
 
     // iterate over all reducers
     for (int rid = 0; rid < num_partitions; rid ++) {
@@ -496,7 +497,6 @@ JNIEXPORT jlongArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1length
         struct block_pointer *map_block = write_blocks[map_block_id];
         
         partition_lengths[rid] = 0;
-        msg->num_task = 0;
         // iterate over the list of all blocks for (mid, rid)
         while (map_block != NULL) {
             partition_lengths[rid] += map_block->num_kv * sizeof(struct kv_pair_t);
@@ -638,7 +638,7 @@ JNIEXPORT jbyteArray JNICALL Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1wait(J
     };
 
     int lrid = get_lrid_from_key(key);
-    LOG_DEBUG("Entering ipc_wait, key=%d\n, lrid=%d\n", key, lrid);
+    LOG_DEBUG("Entering ipc_wait, key=%d, lrid=%d\n", key, lrid);
     if (lrid_finished_read[lrid] == lrid_total_read[lrid]) {
         LOG_DEBUG("Leaving ipc_wait and returning NULL, key=%d\n", key);
         return NULL;

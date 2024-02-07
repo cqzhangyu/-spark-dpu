@@ -62,7 +62,7 @@ main(int argc, char **argv)
     int exit_status = EXIT_SUCCESS;
 
     dma_cfg.mode = DMA_COPY_MODE_DPU;
-    set_log_level(LOG_LEVEL_INFO);
+    set_log_level(LOG_LEVEL_DEBUG);
 
     // handle sigint and sigterm
     signal(SIGINT, sig_handler);
