@@ -350,7 +350,9 @@ Java_org_apache_spark_shuffle_aggr_DPDK_ipc_1initall(
     msg.write_desc = dma_ctx.write_desc;
     msg.read_desc = dma_ctx.read_desc;
     msg.read_addr = dma_ctx.read_buf;
-    msg.read_size = MMAP_SIZE;
+    msg.max_msg_size = CC_MAX_MSG_SIZE;
+    msg.max_write_size = MAX_BLOCK_SIZE;
+    msg.tot_read_size = MMAP_SIZE;
 
     /* Send the memory map export descriptor to DPU */
     cc_send_msg(&msg, sizeof(struct msg_init_t));

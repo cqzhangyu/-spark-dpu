@@ -33,7 +33,9 @@ struct msg_init_t {
     void* write_desc;
     void* read_desc;
     void* read_addr;
-    size_t read_size;
+    size_t max_msg_size;
+    size_t max_write_size;
+    size_t tot_read_size;
 };
 
 struct msg_write_t {
